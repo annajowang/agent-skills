@@ -48,17 +48,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Standard initialization
-        val ai = Firebase.ai
-
-        // Or initialize with replay protection using limited-use App Check tokens:
-        val protectedAi = Firebase.ai(
+        // Initialize with replay protection using limited-use App Check tokens:
+        val ai = Firebase.ai(
             backend = GenerativeBackend.googleAI(),
             useLimitedUseAppCheckTokens = true
         )
 
         // [AGENT] Replace "<latest_supported_model>" with the latest model from https://firebase.google.com/docs/ai-logic/models.md.txt
-        val model = protectedAi.generativeModel("<latest_supported_model>")
+        val model = ai.generativeModel("<latest_supported_model>")
 
         // Generate content
         lifecycleScope.launch {

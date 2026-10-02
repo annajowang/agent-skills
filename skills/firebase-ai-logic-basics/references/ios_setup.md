@@ -7,18 +7,15 @@ Ensure you have installed the `FirebaseAILogic` SDK via Swift Package Manager.
 ```swift
 import FirebaseAILogic
 
-// Initialize the Firebase AI service (defaults to Gemini Developer API).
-let ai = FirebaseAI.firebaseAI()
-
 // To enable replay protection for generative or preview models, pass
 // useLimitedUseAppCheckTokens: true with your backend:
-let aiWithAppCheck = FirebaseAI.firebaseAI(
+let ai = FirebaseAI.firebaseAI(
     backend: .googleAI(),
     useLimitedUseAppCheckTokens: true
 )
 
 // [AGENT] Replace "<latest_supported_model>" with the latest model from https://firebase.google.com/docs/ai-logic/models.md.txt
-let model = aiWithAppCheck.generativeModel(modelName: "<latest_supported_model>")
+let model = ai.generativeModel(modelName: "<latest_supported_model>")
 ```
 
 ### App Check Replay Protection
