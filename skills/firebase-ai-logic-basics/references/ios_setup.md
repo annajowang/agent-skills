@@ -25,8 +25,7 @@ let model = aiWithAppCheck.generativeModel(modelName: "<latest_supported_model>"
 
 Generative and preview models enforce replay protection with 5-minute
 limited-use App Check tokens. If you call a protected model without enabling
-limited-use tokens, or if App Check enforcement is enabled, the request fails
-with:
+limited-use tokens, the request fails with:
 
 ```text
 HTTP 403: "To access this model, you must enforce Firebase App Check"
