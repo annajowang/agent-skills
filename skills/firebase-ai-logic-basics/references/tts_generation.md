@@ -435,7 +435,7 @@ class SpeechStreamingManager {
             responseStream.collect { chunk ->
                 chunk.candidates.firstOrNull()?.content?.parts?.forEach { part ->
                     if (part is com.google.firebase.ai.type.InlineDataPart) {
-                        val audioBytes = part.inlineData
+                        val audioBytes = part.data
                         audioTrack.write(audioBytes, 0, audioBytes.size)
                     }
                 }
@@ -497,14 +497,19 @@ fun playWavAudio(context: Context, wavBytes: ByteArray) {
         FileOutputStream(this).use { it.write(wavBytes) }
     }
 
-    MediaPlayer().apply {
-        setDataSource(tempFile.absolutePath)
-        prepare()
-        start()
-        setOnCompletionListener {
+    val mediaPlayer = MediaPlayer()
+    try {
+        mediaPlayer.setDataSource(tempFile.absolutePath)
+        mediaPlayer.prepare()
+        mediaPlayer.start()
+        mediaPlayer.setOnCompletionListener {
             it.release()
             tempFile.delete()
         }
+    } catch (e: Exception) {
+        mediaPlayer.release()
+        tempFile.delete()
+        throw e
     }
 }
 ```
@@ -541,20 +546,29 @@ const model = getGenerativeModel(ai, {
 });
 
 export class WebSpeechPlayer {
-  private audioCtx: AudioContext;
+  private audioCtx: AudioContext | null = null;
   private nextStartTime: number = 0;
 
-  constructor() {
-    this.audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)({
-      sampleRate: 24000,
-    });
+  private getAudioContext(): AudioContext {
+    if (!this.audioCtx) {
+      if (typeof window === "undefined") {
+        throw new Error("AudioContext is only available in browser environments.");
+      }
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      this.audioCtx = new AudioContextClass({ sampleRate: 24000 });
+    }
+    return this.audioCtx;
   }
 
   async playSpeechStream(prompt: string) {
-    if (this.audioCtx.state === "suspended") {
-      await this.audioCtx.resume();
+    const ctx = this.getAudioContext();
+    if (ctx.state === "suspended") {
+      await ctx.resume();
     }
-    this.nextStartTime = this.audioCtx.currentTime;
+    this.nextStartTime = ctx.currentTime;
 
     const responseStream = await model.generateContentStream(prompt);
 
@@ -564,14 +578,14 @@ export class WebSpeechPlayer {
         for (const part of candidate.content?.parts || []) {
           if ("inlineData" in part && part.inlineData?.data) {
             const rawPcm = this.base64ToArrayBuffer(part.inlineData.data);
-            this.queuePcmChunk(rawPcm);
+            this.queuePcmChunk(rawPcm, ctx);
           }
         }
       }
     }
   }
 
-  private queuePcmChunk(pcmData: ArrayBuffer) {
+  private queuePcmChunk(pcmData: ArrayBuffer, ctx: AudioContext) {
     const int16Array = new Int16Array(pcmData);
     const float32Array = new Float32Array(int16Array.length);
 
@@ -580,14 +594,14 @@ export class WebSpeechPlayer {
       float32Array[i] = int16Array[i] / 32768.0;
     }
 
-    const audioBuffer = this.audioCtx.createBuffer(1, float32Array.length, 24000);
+    const audioBuffer = ctx.createBuffer(1, float32Array.length, 24000);
     audioBuffer.copyToChannel(float32Array, 0);
 
-    const source = this.audioCtx.createBufferSource();
+    const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(this.audioCtx.destination);
+    source.connect(ctx.destination);
 
-    const startTime = Math.max(this.nextStartTime, this.audioCtx.currentTime);
+    const startTime = Math.max(this.nextStartTime, ctx.currentTime);
     source.start(startTime);
     this.nextStartTime = startTime + audioBuffer.duration;
   }
