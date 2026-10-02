@@ -53,7 +53,7 @@ To resolve this error on Web, initialize `getAI` with
 `useLimitedUseAppCheckTokens: true`:
 
 ```javascript
-const ai = getAI(firebaseApp, {
+const ai = getAI(app, {
   backend: new GoogleAIBackend(),
   useLimitedUseAppCheckTokens: true,
 });
