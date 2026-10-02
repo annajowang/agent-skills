@@ -177,6 +177,7 @@ Console and prevent token churn, persist a stable token by setting the
 ```swift
 #if DEBUG
 // ✅ SAFE: Load from gitignored local file or process environment
+// Note: loadGitIgnoredDebugToken() is a placeholder for your custom helper (e.g., reading from a gitignored plist)
 if let debugToken = loadGitIgnoredDebugToken() {
   setenv("AppCheckDebugToken", debugToken, 0)
 }

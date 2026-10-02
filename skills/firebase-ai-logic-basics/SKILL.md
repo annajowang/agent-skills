@@ -175,17 +175,17 @@ Tokens** during development and testing to bypass standard attestation.
 > incognito/private windows, or switching browsers generates a new debug token
 > when `self.FIREBASE_APPCHECK_DEBUG_TOKEN = true` is used. To persist a stable
 > debug token without leaking secrets into client bundles, load it from a
-> gitignored local environment file:
-> `self.FIREBASE_APPCHECK_DEBUG_TOKEN = process.env.NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN || true;`.
-> Never hardcode literal token strings into JavaScript or TypeScript source
-> files.
+> gitignored local environment file (e.g., using
+> `process.env.NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN` for Next.js or
+> `import.meta.env.VITE_APPCHECK_DEBUG_TOKEN` for Vite). Never hardcode literal
+> token strings into JavaScript or TypeScript source files.
 >
 > **💡 Android Tip (Prevent Debug Token Churn):** Emulator resets or clearing app
 > storage erase `SharedPreferences`, causing `DebugAppCheckProviderFactory` to
 > print a new debug token in Logcat. To keep a stable debug token across test
 > runs and builds without committing it to git, store it in gitignored
-> `local.properties` and inject it in `build.gradle.kts`:
-> `testInstrumentationRunnerArguments["firebaseAppCheckDebugSecret"] = localProperties.getProperty("APP_CHECK_DEBUG_TOKEN") ?: System.getenv("APP_CHECK_DEBUG_TOKEN") ?: ""`.
+> `local.properties` and inject it in `build.gradle.kts` if non-empty:
+> `if (appCheckDebugToken.isNotEmpty()) { testInstrumentationRunnerArguments["firebaseAppCheckDebugSecret"] = appCheckDebugToken }`.
 
 ##### CI/CD Pipelines (Pre-Provisioned)
 

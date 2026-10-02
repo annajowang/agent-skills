@@ -154,6 +154,7 @@ secrets:
      #if DEBUG
      // ⛔️ DO NOT hardcode literal tokens: setenv("AppCheckDebugToken", "secret-uuid", 0)
      // ✅ SAFE: Load dynamically from a gitignored local file, xcconfig, or process environment
+     // Note: loadGitIgnoredDebugToken() is a placeholder for your custom helper (e.g., reading from a gitignored plist)
      if let debugToken = loadGitIgnoredDebugToken() {
        setenv("AppCheckDebugToken", debugToken, 0)
      }

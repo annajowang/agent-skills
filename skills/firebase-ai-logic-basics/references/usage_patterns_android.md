@@ -188,7 +188,9 @@ secrets:
 
    android {
        defaultConfig {
-           testInstrumentationRunnerArguments["firebaseAppCheckDebugSecret"] = appCheckDebugToken
+           if (appCheckDebugToken.isNotEmpty()) {
+               testInstrumentationRunnerArguments["firebaseAppCheckDebugSecret"] = appCheckDebugToken
+           }
        }
    }
    ```

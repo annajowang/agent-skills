@@ -110,10 +110,14 @@ To persist a stable debug token across browser resets without leaking secrets:
    ```javascript
    import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 
-   if (process.env.NODE_ENV === "development") {
-     // ✅ SAFE: Load dynamically from gitignored environment variable; fallback to true to auto-generate
+   if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
+     // ✅ SAFE: Load dynamically from Next.js environment variable; fallback to true to auto-generate
      self.FIREBASE_APPCHECK_DEBUG_TOKEN =
        process.env.NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN || true;
+   } else if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+     // ✅ SAFE: Load dynamically from Vite environment variable; fallback to true to auto-generate
+     self.FIREBASE_APPCHECK_DEBUG_TOKEN =
+       import.meta.env.VITE_APPCHECK_DEBUG_TOKEN || true;
    }
 
    const appCheck = initializeAppCheck(app, {
