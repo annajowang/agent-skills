@@ -184,3 +184,27 @@ import {getGenerativeModel, InferenceMode } from "firebase/ai";
 
 const hybridModel = getGenerativeModel(ai, { mode: InferenceMode.PREFER_ON_DEVICE });
 ```
+
+## App Check (Debug Token Persistence)
+
+When testing AI Logic on Web with App Check, avoid debug token churn when
+clearing browser data or testing across private windows:
+
+> [!WARNING] **CRITICAL: Never Hardcode or Commit Debug Tokens** Never hardcode
+> debug token strings in web source code. Always load them from a local,
+> gitignored environment file.
+
+```javascript
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
+
+if (process.env.NODE_ENV === "development") {
+  // ✅ SAFE: Load dynamically from gitignored environment variable; fallback to true to auto-generate
+  self.FIREBASE_APPCHECK_DEBUG_TOKEN =
+    process.env.NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN || true;
+}
+
+const appCheck = initializeAppCheck(app, {
+  provider: new ReCaptchaEnterpriseProvider("/* reCAPTCHA site key */"),
+  isTokenAutoRefreshEnabled: true,
+});
+```
