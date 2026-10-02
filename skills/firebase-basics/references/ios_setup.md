@@ -161,6 +161,8 @@ secrets:
      let providerFactory = AppCheckDebugProviderFactory()
      AppCheck.setAppCheckProviderFactory(providerFactory)
      #endif
+
+     FirebaseApp.configure() // Must be called AFTER setting the App Check provider factory
      ```
 
 Setting this environment variable avoids invalidating tokens registered in the

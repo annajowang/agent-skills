@@ -188,6 +188,10 @@ secrets:
 
    android {
        defaultConfig {
+           // For normal emulator runs (injects into AndroidManifest)
+           manifestPlaceholders["firebaseAppCheckDebugSecret"] = appCheckDebugToken
+
+           // For instrumentation tests
            if (appCheckDebugToken.isNotEmpty()) {
                testInstrumentationRunnerArguments["firebaseAppCheckDebugSecret"] = appCheckDebugToken
            }

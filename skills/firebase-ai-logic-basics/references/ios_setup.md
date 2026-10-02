@@ -184,4 +184,6 @@ if let debugToken = loadGitIgnoredDebugToken() {
 let providerFactory = AppCheckDebugProviderFactory()
 AppCheck.setAppCheckProviderFactory(providerFactory)
 #endif
+
+FirebaseApp.configure() // Configure Firebase AFTER setting the App Check provider factory
 ```
