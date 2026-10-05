@@ -80,9 +80,7 @@ jobs:
           python-version: '3.11'
 
       - name: Run mdformat on synced skills
-        run: |
-          pip install -q mdformat
-          python3 main-branch/scripts/format.py android-studio-branch/skills
+        run: bash main-branch/scripts/format.sh android-studio-branch/skills
 
       - name: Create Pull Request against platform/android-studio
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8

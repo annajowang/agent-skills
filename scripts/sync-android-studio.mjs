@@ -67,11 +67,33 @@ function parseFrontmatterBlocks(rawFrontmatter) {
   return blocks;
 }
 
+function mergeMetadataBlocks(mainMetadataBlock, targetMetadataBlock) {
+  if (!mainMetadataBlock) return targetMetadataBlock;
+  if (!targetMetadataBlock) return mainMetadataBlock;
+
+  const parseSubKeys = (block) => {
+    const map = new Map();
+    for (const line of block.split('\n').slice(1)) {
+      const m = line.match(/^\s+([a-zA-Z0-9_-]+):\s*(.*)$/);
+      if (m) {
+        map.set(m[1], line);
+      }
+    }
+    return map;
+  };
+
+  const mainSub = parseSubKeys(mainMetadataBlock);
+  const targetSub = parseSubKeys(targetMetadataBlock);
+  const merged = new Map([...targetSub, ...mainSub]);
+
+  return ['metadata:', ...merged.values()].join('\n');
+}
+
 /**
  * Deterministically merges frontmatter from `main` into a target `SKILL.md`,
  * preserving the target's Android-specific `description` while taking all
  * other frontmatter blocks (`name`, `version`, `compatibility`, `metadata`)
- * directly from `main`.
+ * directly from `main` (and preserving any existing `metadata` sub-keys on target).
  */
 function syncFrontmatterDeterministically(mainContent, targetContent) {
   const mainParts = splitFrontmatter(mainContent);
@@ -85,9 +107,14 @@ function syncFrontmatterDeterministically(mainContent, targetContent) {
   for (const [key, blockText] of mainBlocks.entries()) {
     if (key === 'description' && targetBlocks.has('description')) {
       mergedLines.push(targetBlocks.get('description'));
+    } else if (key === 'metadata') {
+      mergedLines.push(mergeMetadataBlocks(blockText, targetBlocks.get('metadata')));
     } else {
       mergedLines.push(blockText);
     }
+  }
+  if (!mainBlocks.has('metadata') && targetBlocks.has('metadata')) {
+    mergedLines.push(targetBlocks.get('metadata'));
   }
 
   return `---\n${mergedLines.join('\n')}\n---\n${targetParts.body}`;
