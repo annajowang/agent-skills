@@ -20,6 +20,7 @@ permissions:
 jobs:
   sync-android-studio:
     name: Sync main to platform/android-studio
+    environment: genkit skills automerger cron
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
