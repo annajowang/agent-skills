@@ -5,6 +5,8 @@ description: >-
   for Firebase using the Firebase CLI. Use when checking Firebase CLI version
   (must use 'npx -y firebase-tools@latest --version'), initializing a Firebase
   environment, authenticating, setting active projects, or setting up `google-services.json` files.
+metadata:
+  author: Google LLC
 ---
 
 # Prerequisites

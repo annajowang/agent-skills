@@ -7,6 +7,8 @@ description: >-
   configuring security rules, designing data models, writing client SDK
   queries, or checking indexes.
 compatibility: This skill is best used with the Firebase CLI, but does not require it. Firebase CLI can be accessed through `npx -y firebase-tools@latest`.
+metadata:
+  author: Google LLC
 ---
 
 # Cloud Firestore Database and Operations
