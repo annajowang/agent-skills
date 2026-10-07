@@ -18,8 +18,15 @@
  *               rtdb_rules | http_endpoint | other
  *   node poc.mjs install --packages "<pkg@ver> ..." | --requirements FILE
  *                        | --script <pocDir/install_deps_x.sh>
- *   node poc.mjs run <pocFile> [--timeout 180]
+ *   node poc.mjs run <pocFile> [--timeout 180] [--runtime local|cloud-run-sandbox]
+ *        cloud-run-sandbox: [--sandbox-url URL | --project P [--region R]]
+ *   node poc.mjs sandbox-deploy --project P [--region us-central1]
  *   node poc.mjs clean
+ *
+ * Isolation: local runs get a scrubbed environment (no ADC / gcloud / Firebase
+ * CLI / npm credentials, HOME inside the PoC dir) and a static source guard.
+ * `--runtime cloud-run-sandbox` runs install + PoC inside a Cloud Run sandbox
+ * (gVisor, no egress during the PoC, no metadata server) instead.
  *
  * A PoC communicates its verdict by printing a final line:
  *   POC_RESULT: VULNERABLE        (exploit succeeded)
@@ -114,6 +121,95 @@ function writeEmulatorConfig(root, pocDir, services) {
   return { rules, emulatorPorts: { firestore: 8181, storage: 9199, database: 9009 } };
 }
 
+const EMULATOR_DEFAULT_PORTS = { firestore: 8181, storage: 9199, database: 9009, auth: 9099, functions: 5001 };
+
+/** Env vars that are safe (and needed) to pass through to PoC processes. */
+const ENV_PASSTHROUGH = [
+  'PATH', 'LANG', 'LC_ALL', 'TERM', 'TZ', 'TMPDIR', 'JAVA_HOME', 'SystemRoot', 'COMSPEC',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+];
+
+/** Emulator ports: the app's firebase.json `emulators` block wins, else defaults. */
+export function emulatorPorts(root) {
+  const fj = readJson(path.join(root, 'firebase.json')) || {};
+  const ports = { ...EMULATOR_DEFAULT_PORTS };
+  for (const k of Object.keys(ports)) {
+    const port = fj.emulators?.[k]?.port;
+    if (port) ports[k] = Number(port);
+  }
+  return ports;
+}
+
+/**
+ * Builds a minimal environment for PoC / install processes.
+ *
+ * PoCs are LLM-written code derived from untrusted repo content, and installs
+ * run third-party packages, so they must not inherit the developer's
+ * credentials. This drops everything except an allowlist, points HOME and all
+ * gcloud / Firebase CLI / npm config at an empty directory inside the PoC dir
+ * (so ADC, `firebase login` tokens and ~/.npmrc auth are unreachable), and
+ * pre-sets every emulator host so Admin/client SDKs default to the emulators.
+ */
+export function buildPocEnv(root, { realHome = process.env.HOME || '', baseEnv = process.env } = {}) {
+  const pocDir = pocDirFor(root);
+  const home = path.join(pocDir, '.home');
+  for (const d of [home, path.join(home, '.config'), path.join(home, '.cache'), path.join(home, 'gcloud')]) fs.mkdirSync(d, { recursive: true });
+  const npmrc = path.join(home, '.npmrc');
+  if (!exists(npmrc)) fs.writeFileSync(npmrc, '');
+  const env = {};
+  for (const k of ENV_PASSTHROUGH) if (baseEnv[k] !== undefined) env[k] = baseEnv[k];
+  const ports = emulatorPorts(root);
+  Object.assign(env, {
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+    XDG_CACHE_HOME: path.join(home, '.cache'),
+    CLOUDSDK_CONFIG: path.join(home, 'gcloud'),
+    // Emulator JARs only (no credentials live here); avoids re-downloading per run.
+    FIREBASE_EMULATORS_PATH: baseEnv.FIREBASE_EMULATORS_PATH || path.join(realHome, '.cache', 'firebase', 'emulators'),
+    npm_config_cache: path.join(pocDir, '.npm_cache'),
+    npm_config_userconfig: npmrc,
+    npm_config_update_notifier: 'false',
+    npm_config_fund: 'false',
+    npm_config_audit: 'false',
+    GCLOUD_PROJECT: DEMO_PROJECT_ID,
+    GOOGLE_CLOUD_PROJECT: DEMO_PROJECT_ID,
+    FIREBASE_SECURITY_POC: '1',
+    FIRESTORE_EMULATOR_HOST: `127.0.0.1:${ports.firestore}`,
+    FIREBASE_STORAGE_EMULATOR_HOST: `127.0.0.1:${ports.storage}`,
+    FIREBASE_DATABASE_EMULATOR_HOST: `127.0.0.1:${ports.database}`,
+    FIREBASE_AUTH_EMULATOR_HOST: `127.0.0.1:${ports.auth}`,
+  });
+  return env;
+}
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '::1']);
+const CREDENTIAL_PATTERNS = [
+  [/applicationDefault\s*\(/, 'uses Application Default Credentials'],
+  [/credential\.cert\s*\(|serviceAccountKey|service[-_]account.*\.json/i, 'loads a service-account key'],
+  [/GOOGLE_APPLICATION_CREDENTIALS|FIREBASE_TOKEN/, 'reads a credential env var'],
+  [/\.config\/gcloud|application_default_credentials|\.config\/configstore|\.ssh\/|\.npmrc/, 'reads a local credential file'],
+];
+
+/**
+ * Static guard run before every PoC. Refuses PoCs that target non-local URLs,
+ * non-demo project IDs, or local credentials. Heuristic - the env scrubbing in
+ * buildPocEnv() is the real control; this catches mistakes early with a clear
+ * message.
+ */
+export function checkPocSource(src) {
+  const problems = [];
+  for (const m of src.matchAll(/\bhttps?:\/\/(\[[^\]]+\]|[^/:'"`\s)]+)/gi)) {
+    const host = m[1].toLowerCase();
+    if (!LOCAL_HOSTS.has(host) && !host.startsWith('${')) problems.push(`targets non-local host '${host}'`);
+  }
+  for (const m of src.matchAll(/projectId\s*:\s*['"`]([^'"`]+)['"`]/g)) {
+    if (!m[1].startsWith('demo-')) problems.push(`uses non-demo projectId '${m[1]}'`);
+  }
+  for (const [rx, why] of CREDENTIAL_PATTERNS) if (rx.test(src)) problems.push(why);
+  return [...new Set(problems)];
+}
+
 export function initPoc(root, { type = 'other', location = '', problem = '' } = {}) {
   const pocDir = pocDirFor(root);
   fs.mkdirSync(pocDir, { recursive: true });
@@ -177,20 +273,23 @@ function run(cmd, args, opts) {
   return { exitCode: r.status, signal: r.signal, stdout: r.stdout || '', stderr: (r.stderr || '') + (r.error ? `\n${r.error.message}` : '') };
 }
 
-export function installDeps(root, { packages, requirements, script }) {
+export function installDeps(root, { packages, requirements, script, allowScripts = false }) {
   const pocDir = pocDirFor(root);
   fs.mkdirSync(pocDir, { recursive: true });
-  const env = { ...process.env, npm_config_cache: path.join(pocDir, '.npm_cache'), npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_audit: 'false' };
+  const env = buildPocEnv(root);
   if (packages) {
     if (!exists(path.join(pocDir, 'package.json'))) fs.writeFileSync(path.join(pocDir, 'package.json'), '{ "name": "firebase-security-poc", "private": true, "type": "module" }\n');
     const specs = String(packages).split(/\s+/).filter(Boolean);
     if (specs.some((s) => /[;&|`$<>]/.test(s))) throw new Error('Invalid package spec.');
-    return run('npm', ['install', '--no-save', '--silent', ...specs], { cwd: pocDir, env });
+    // --save records deps in package.json so remote runtimes can reinstall them.
+    // Lifecycle scripts are off by default: they are arbitrary third-party code.
+    const scriptsFlag = allowScripts ? [] : ['--ignore-scripts'];
+    return run('npm', ['install', '--save', '--silent', ...scriptsFlag, ...specs], { cwd: pocDir, env });
   }
   if (requirements) {
     const venv = path.join(pocDir, '.venv');
-    if (!exists(venv)) run('python3', ['-m', 'venv', venv], { cwd: pocDir });
-    return run(path.join(venv, 'bin', 'python'), ['-m', 'pip', 'install', '-q', '-r', path.resolve(root, requirements)], { cwd: pocDir });
+    if (!exists(venv)) run('python3', ['-m', 'venv', venv], { cwd: pocDir, env });
+    return run(path.join(venv, 'bin', 'python'), ['-m', 'pip', 'install', '-q', '-r', path.resolve(root, requirements)], { cwd: pocDir, env });
   }
   if (script) {
     const resolved = assertInsidePocDir(root, script);
@@ -227,13 +326,17 @@ export function detectEmulatorServices(base, file) {
   return services.length ? services : null;
 }
 
-export function runPoc(root, file, { timeoutSec = 180 } = {}) {
+export function runPoc(root, file, { timeoutSec = 180, allowUnsafe = false } = {}) {
   const resolved = assertInsidePocDir(root, file);
   const pocDir = pocDirFor(root);
+  const problems = checkPocSource(readText(resolved) || '');
+  if (problems.length && !allowUnsafe) {
+    throw Object.assign(new Error(`Security Error: PoC refused - ${problems.join('; ')}. PoCs must only target local emulators/dev servers with a demo-* project and must not use local credentials.`), { security: true, problems });
+  }
   const base = path.basename(resolved);
   const ext = path.extname(resolved).toLowerCase();
   const canary = path.join(root, PATH_TRAVERSAL_CANARY);
-  const env = { ...process.env, npm_config_cache: path.join(pocDir, '.npm_cache'), GCLOUD_PROJECT: DEMO_PROJECT_ID, FIREBASE_SECURITY_POC: '1' };
+  const env = buildPocEnv(root);
   const timeout = Number(timeoutSec) * 1000;
 
   if (base.includes('path_traversal')) fs.writeFileSync(canary, 'FIREBASE_SECURITY_CANARY: path traversal confirmed\n');
@@ -281,6 +384,130 @@ export function runPoc(root, file, { timeoutSec = 180 } = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Cloud Run sandbox runtime (`run --runtime cloud-run-sandbox`)
+// ---------------------------------------------------------------------------
+
+export const SANDBOX_SERVICE = 'firebase-security-poc-runner';
+const SANDBOX_RUNNER_DIR = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'sandbox-runner');
+const UPLOAD_EXCLUDES = ['node_modules', '.npm_cache', '.home', '.venv', '*-debug.log', '.git'];
+
+/**
+ * Decide how a PoC must be run: `rules` (emulator via the PoC dir's
+ * firebase.json), `endpoint` (app's firebase.json, Functions + data
+ * emulators) or `plain` (just the script).
+ */
+export function classifyPoc(root, file) {
+  const base = path.basename(file);
+  const rulesServices = detectEmulatorServices(base, file);
+  if (rulesServices) return { mode: 'rules', services: rulesServices, functionsDirs: [] };
+  const src = readText(file) || '';
+  if (base.startsWith('poc_http_endpoint') || /:5001\//.test(src)) {
+    const fj = readJson(path.join(root, 'firebase.json')) || {};
+    const fnList = Array.isArray(fj.functions) ? fj.functions : fj.functions ? [fj.functions] : [];
+    const functionsDirs = fnList.map((f) => f.source || 'functions');
+    const services = [];
+    if (functionsDirs.length) services.push('functions');
+    if (fj.firestore) services.push('firestore');
+    if (fj.database) services.push('database');
+    if (fj.storage) services.push('storage');
+    services.push('auth');
+    return { mode: 'endpoint', services, functionsDirs };
+  }
+  return { mode: 'plain', services: [], functionsDirs: [] };
+}
+
+/** Paths (relative to root) uploaded to the sandbox - never the whole repo. */
+export function sandboxUploadPaths(root, classification) {
+  const rel = (p) => path.relative(root, p);
+  const out = new Set([rel(pocDirFor(root))]);
+  if (exists(path.join(root, 'firebase.json'))) out.add('firebase.json');
+  for (const p of Object.values(findRulesFiles(root))) if (p) out.add(rel(p));
+  for (const d of classification.functionsDirs) if (exists(path.join(root, d))) out.add(d);
+  return [...out];
+}
+
+function gcloud(args) {
+  const r = run('gcloud', args, {});
+  if (r.exitCode !== 0) throw new Error(`gcloud ${args.slice(0, 3).join(' ')} failed: ${r.stderr.trim().slice(-800)}`);
+  return r.stdout.trim();
+}
+
+export function resolveSandboxUrl({ url, project, region = 'us-central1', service = SANDBOX_SERVICE } = {}) {
+  const fromEnv = process.env.FIREBASE_SECURITY_SANDBOX_URL;
+  if (url || fromEnv) return String(url || fromEnv).replace(/\/$/, '');
+  if (!project) throw new Error('cloud-run-sandbox runtime needs --sandbox-url, FIREBASE_SECURITY_SANDBOX_URL, or --project to look up the runner.');
+  return gcloud(['run', 'services', 'describe', service, '--project', project, '--region', region, '--format', 'value(status.url)']);
+}
+
+/**
+ * Upload the PoC (plus rules / functions source it needs) to the runner and
+ * execute it inside a Cloud Run sandbox. The local machine only packs files
+ * and makes an authenticated HTTPS call; no PoC code runs locally.
+ */
+export async function runPocInSandbox(root, file, { timeoutSec = 180, allowUnsafe = false, url, project, region, service, token } = {}) {
+  const resolved = assertInsidePocDir(root, file);
+  const problems = checkPocSource(readText(resolved) || '');
+  if (problems.length && !allowUnsafe) {
+    throw Object.assign(new Error(`Security Error: PoC refused - ${problems.join('; ')}.`), { security: true, problems });
+  }
+  const cls = classifyPoc(root, resolved);
+  const paths = sandboxUploadPaths(root, cls);
+  const tar = spawnSync('tar', ['-czf', '-', ...UPLOAD_EXCLUDES.map((e) => `--exclude=${e}`), '-C', root, ...paths], { maxBuffer: 64 * 1024 * 1024 });
+  if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+  const base = resolveSandboxUrl({ url, project, region, service });
+  const idToken = token || process.env.FIREBASE_SECURITY_SANDBOX_TOKEN || gcloud(['auth', 'print-identity-token']);
+  const spec = {
+    pocFile: path.relative(root, resolved).split(path.sep).join('/'),
+    mode: cls.mode,
+    services: cls.services,
+    functionsDirs: cls.functionsDirs,
+    timeoutSec: Number(timeoutSec),
+    canary: path.basename(resolved).includes('path_traversal'),
+  };
+  const t0 = Date.now();
+  const res = await fetch(`${base}/run`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${idToken}`,
+      'content-type': 'application/gzip',
+      'x-poc-spec': Buffer.from(JSON.stringify(spec)).toString('base64'),
+    },
+    body: tar.stdout,
+    signal: AbortSignal.timeout((Number(timeoutSec) + 420) * 1000),
+  });
+  const text = await res.text();
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { error: `runner returned HTTP ${res.status}: ${text.slice(0, 500)}` };
+  }
+  return { file: resolved, runtime: 'cloud-run-sandbox', uploaded: paths, uploadBytes: tar.stdout.length, roundTripMs: Date.now() - t0, httpStatus: res.status, ...body };
+}
+
+/**
+ * Deploy the runner to Cloud Run with sandboxes enabled, private (IAM-only)
+ * and running as a dedicated service account with no roles.
+ */
+export function deploySandboxRunner({ project, region = 'us-central1', service = SANDBOX_SERVICE } = {}) {
+  if (!project) throw new Error('sandbox-deploy requires --project');
+  const saName = 'fb-security-poc-runner';
+  const sa = `${saName}@${project}.iam.gserviceaccount.com`;
+  const existing = run('gcloud', ['iam', 'service-accounts', 'describe', sa, '--project', project], {});
+  if (existing.exitCode !== 0) {
+    gcloud(['iam', 'service-accounts', 'create', saName, '--project', project, '--display-name', 'Firebase security PoC runner (no roles)']);
+  }
+  const r = run('gcloud', [
+    'beta', 'run', 'deploy', service, '--source', SANDBOX_RUNNER_DIR, '--project', project, '--region', region,
+    '--sandbox-launcher', '--execution-environment', 'gen2', '--no-allow-unauthenticated',
+    '--service-account', sa, '--memory', '4Gi', '--cpu', '2', '--concurrency', '1', '--timeout', '900',
+    '--max-instances', '3', '--quiet',
+  ], { timeout: 1800 * 1000 });
+  if (r.exitCode !== 0) return { ok: false, stderr: r.stderr.slice(-4000) };
+  return { ok: true, url: resolveSandboxUrl({ project, region, service }), serviceAccount: sa };
+}
+
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -298,7 +525,7 @@ function parseArgs(argv) {
   return o;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const [cmd, ...rest] = argv;
   const o = parseArgs(rest);
   const root = path.resolve(o.root || process.cwd());
@@ -309,24 +536,33 @@ export function main(argv = process.argv.slice(2)) {
         out(initPoc(root, { type: o.type, location: o.location, problem: o.problem }));
         return 0;
       case 'install': {
-        const r = installDeps(root, { packages: o.packages, requirements: o.requirements, script: o.script });
+        const r = installDeps(root, { packages: o.packages, requirements: o.requirements, script: o.script, allowScripts: !!o['allow-scripts'] });
         out({ exitCode: r.exitCode, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-4000) });
         return r.exitCode === 0 ? 0 : 1;
       }
       case 'run': {
-        if (!o._[0]) throw new Error('Usage: run <pocFile>');
-        const r = runPoc(root, o._[0], { timeoutSec: o.timeout || 180 });
-        r.stdout = r.stdout.slice(-12000);
-        r.stderr = r.stderr.slice(-6000);
+        if (!o._[0]) throw new Error('Usage: run <pocFile> [--runtime local|cloud-run-sandbox]');
+        const runtime = o.runtime || process.env.FIREBASE_SECURITY_POC_RUNTIME || 'local';
+        const runOpts = { timeoutSec: o.timeout || 180, allowUnsafe: !!o['allow-unsafe'] };
+        const r = runtime === 'cloud-run-sandbox'
+          ? await runPocInSandbox(root, o._[0], { ...runOpts, url: o['sandbox-url'], project: o.project, region: o.region, service: o.service })
+          : runPoc(root, o._[0], runOpts);
+        r.stdout = (r.stdout || '').slice(-12000);
+        r.stderr = (r.stderr || '').slice(-6000);
         out(r);
         return 0;
+      }
+      case 'sandbox-deploy': {
+        const r = deploySandboxRunner({ project: o.project, region: o.region, service: o.service });
+        out(r);
+        return r.ok ? 0 : 1;
       }
       case 'clean':
         fs.rmSync(pocDirFor(root), { recursive: true, force: true });
         out({ removed: pocDirFor(root) });
         return 0;
       default:
-        process.stderr.write('Usage: poc.mjs <init|install|run|clean> ...\n');
+        process.stderr.write('Usage: poc.mjs <init|install|run|sandbox-deploy|clean> ...\n');
         return 2;
     }
   } catch (e) {
@@ -336,4 +572,4 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
-if (invokedDirectly) process.exitCode = main();
+if (invokedDirectly) process.exitCode = await main();

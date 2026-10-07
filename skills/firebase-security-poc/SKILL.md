@@ -18,10 +18,12 @@ the
 
 ## Safety rules (non-negotiable)
 
-- Local only: Firebase Emulator Suite with project ID `demo-security-poc`
-  (`demo-*` projects can never reach real Firebase resources), a local dev
-  server, or a direct function call. **Never** target a deployed URL or a real
-  project, even if the user asks - explain why and offer the emulator instead.
+- Local or sandboxed only: Firebase Emulator Suite with project ID
+  `demo-security-poc` (`demo-*` projects can never reach real Firebase
+  resources), a local dev server, or a direct function call - on this machine or
+  in the opt-in Cloud Run sandbox (see below). **Never** target a deployed URL
+  or a real project, even if the user asks - explain why and offer the emulator
+  instead. `poc.mjs` enforces this with a source guard and a scrubbed env.
 - Non-destructive, no real data, no real third-party API calls, no network
   exfiltration. Write only inside `.firebase-security/poc/`.
 - If several findings are selected, ask which one to PoC first (one PoC per
@@ -32,17 +34,59 @@ the
 Resolve `<SKILL_DIR>` to the directory containing this `SKILL.md`. Run from the
 project root:
 
-| Command                                                                                              | Purpose                                                                                                                 |
-| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `node <SKILL_DIR>/scripts/poc.mjs init --type <type> --location "<file:line>" --problem "<summary>"` | Creates `.firebase-security/poc/`, returns `pocDir`, `pocFileName`, `language`, emulator config and `extraInstructions` |
-| `node <SKILL_DIR>/scripts/poc.mjs install --packages "<pkg@ver> ..."`                                | Installs PoC-only npm deps into the PoC dir (isolated cache, never touches the app's `package.json`)                    |
-| `node <SKILL_DIR>/scripts/poc.mjs install --requirements <file>`                                     | Python deps into a PoC venv                                                                                             |
-| `node <SKILL_DIR>/scripts/poc.mjs run <pocDir>/<pocFileName> [--timeout 180]`                        | Runs the PoC (rules types are wrapped in `firebase emulators:exec`), returns `verdict`, stdout, stderr                  |
-| `node <SKILL_DIR>/scripts/poc.mjs clean`                                                             | Deletes the PoC dir                                                                                                     |
+| Command                                                                                                            | Purpose                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `node <SKILL_DIR>/scripts/poc.mjs init --type <type> --location "<file:line>" --problem "<summary>"`               | Creates `.firebase-security/poc/`, returns `pocDir`, `pocFileName`, `language`, emulator config and `extraInstructions` |
+| `node <SKILL_DIR>/scripts/poc.mjs install --packages "<pkg@ver> ..."`                                              | Installs PoC-only npm deps into the PoC dir (isolated cache, never touches the app's `package.json`)                    |
+| `node <SKILL_DIR>/scripts/poc.mjs install --requirements <file>`                                                   | Python deps into a PoC venv                                                                                             |
+| `node <SKILL_DIR>/scripts/poc.mjs run <pocDir>/<pocFileName> [--timeout 180] [--runtime local\|cloud-run-sandbox]` | Runs the PoC (rules types are wrapped in `firebase emulators:exec`), returns `verdict`, stdout, stderr                  |
+| `node <SKILL_DIR>/scripts/poc.mjs clean`                                                                           | Deletes the PoC dir                                                                                                     |
 
 `--type` values: `firestore_rules`, `storage_rules`, `rtdb_rules`,
 `http_endpoint`, `path_traversal`, `other`. Pick the closest; infer it from the
 finding.
+
+## Isolation and runtimes
+
+PoCs are attacker-style code, often written by an agent from untrusted repo
+content. `poc.mjs` enforces isolation instead of relying on convention:
+
+- **Source guard** (both runtimes): `run` refuses PoCs that reference non-local
+  http(s) hosts, non-`demo-` project IDs, `applicationDefault()` /
+  service-account keys, `GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_TOKEN`, or
+  credential paths (`.config/gcloud`, `.ssh/`, `.npmrc`). Fix the PoC; only pass
+  `--allow-unsafe` if the user explicitly asks and you explain why.
+- **Scrubbed env** (`--runtime local`, default): PoC, `npm install` and `pip`
+  run with an allowlisted env, `HOME`/`CLOUDSDK_CONFIG`/npm config pointed at
+  `.firebase-security/poc/.home`, project `demo-security-poc` and emulator host
+  vars set. ADC, gcloud, Firebase CLI and npm credentials are not visible. npm
+  installs use `--ignore-scripts` (`--allow-scripts` to opt back in). Network is
+  **not** blocked locally.
+- **Cloud Run sandbox** (`--runtime cloud-run-sandbox`, opt-in): uploads only
+  the PoC dir, `firebase.json`, rules files and functions dirs to a private
+  Cloud Run service, and runs them in a
+  [Cloud Run sandbox](https://docs.cloud.google.com/run/docs/code-execution)
+  (gVisor): dependency install with egress, then the PoC + emulators with **no
+  egress**, no metadata server, no host env or secrets. Same verdict format. Use
+  it when the user wants stronger isolation (untrusted repos, CI, shared
+  machines) or has no local Java. It is an isolation upgrade, not a fidelity
+  upgrade: it still runs against emulators, not real IAM/App Check.
+
+Cloud Run sandbox setup (one-time, needs a billing-enabled project the user owns
+that is **not** their app's project; the feature is Pre-GA):
+
+```bash
+node <SKILL_DIR>/scripts/poc.mjs sandbox-deploy --project <sandbox-project> [--region us-central1]
+node <SKILL_DIR>/scripts/poc.mjs run <pocFile> --runtime cloud-run-sandbox --project <sandbox-project>
+```
+
+`sandbox-deploy` creates a role-less service account and a
+`firebase-security-poc-runner` service (`--no-allow-unauthenticated`,
+scale-to-zero, max 3 instances). The client authenticates with
+`gcloud auth print-identity-token`. Also accepts `--sandbox-url` or
+`FIREBASE_SECURITY_SANDBOX_URL`; `FIREBASE_SECURITY_POC_RUNTIME` sets the
+default runtime. Lockfiles pointing at private registries are rewritten to
+registry.npmjs.org inside the sandbox; private packages will not install there.
 
 ## Workflow
 
@@ -79,8 +123,9 @@ finding.
      wrong. Re-check the PoC logic once; if still blocked, tell the user and
      offer to allowlist the finding (see `firebase-security-review`).
    - `INCONCLUSIVE` - read stderr. Common causes: missing Java for emulators
-     (`hint` field), missing deps, wrong import path. Fix and retry at most
-     twice, then report the blocker instead of looping.
+     (`hint` field; or offer `--runtime cloud-run-sandbox`), missing deps, wrong
+     import path, `refused` (source guard - remove the real host/credential).
+     Fix and retry at most twice, then report the blocker instead of looping.
 1. **Hand off.** If vulnerable, ask whether to patch now. If yes, invoke
    `firebase-security-patcher` and pass it the PoC path so it can verify the
    fix.

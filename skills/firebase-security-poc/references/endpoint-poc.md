@@ -75,3 +75,12 @@ reaches `http://169.254.169.254/` or `http://metadata.google.internal/`; wrap
 
 Re-run the same PoC after the fix and expect `NOT_VULNERABLE`, then run one
 legitimate request (with the owner's credentials) and confirm it still succeeds.
+
+## Running in the Cloud Run sandbox
+
+`poc.mjs run --runtime cloud-run-sandbox` treats a PoC as an endpoint PoC when
+its name starts with `poc_http_endpoint` or it calls `:5001/`. It uploads the
+functions dirs (without `node_modules`), installs their deps in the sandbox with
+`npm ci --ignore-scripts`, then runs `firebase emulators:exec` with the app's
+`firebase.json` and no egress. SSRF canaries must listen on `127.0.0.1` inside
+the PoC (loopback works; the internet and metadata server do not).
