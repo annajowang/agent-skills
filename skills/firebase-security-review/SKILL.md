@@ -68,7 +68,9 @@ If `node` is unavailable, perform the same steps manually with `git diff`,
 ## Choose a mode
 
 Pick from the user's request; default to **Diff** if there are uncommitted or
-branch changes, otherwise **Full**. State the mode you chose.
+branch changes, otherwise **Full**. State the mode you chose. A mode name passed
+as the argument (`diff`, `full`, `quick`, `pre-deploy`, e.g.
+`/firebase-security-review pre-deploy`) selects that mode.
 
 | Mode       | When                                           | Scope command                       |
 | ---------- | ---------------------------------------------- | ----------------------------------- |

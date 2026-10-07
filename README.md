@@ -136,11 +136,16 @@ to every supported agent:
 | `firebase-security-poc`     | Safe, local Proof-of-Concepts, including rules exploits against the Emulator Suite on a `demo-*` project |
 | `firebase-security-patcher` | PoC -> patch -> verify loop with a Firebase-specific remediation knowledge base                          |
 
-Try it by asking your agent _"Run a security review of my app"_, or in Gemini
-CLI / Claude Code run `/firebase:security-review`,
-`/firebase:security-review-full` or `/firebase:security-scan-deps`. Results are
-written to `.firebase-security/`. This is an AI-assisted first pass, not a
-replacement for a full security audit.
+The skills double as slash commands:
+
+- Gemini CLI: `/firebase-security-review` (add `pre-deploy` for review +
+  dependency scan), `/firebase-dependency-scan`
+- Claude Code: `/firebase:firebase-security-review [pre-deploy]`,
+  `/firebase:firebase-dependency-scan`
+- Any agent: natural language (_"Run a security review of my app"_).
+
+Results are written to `.firebase-security/`. This is an AI-assisted first pass,
+not a replacement for a full security audit.
 
 ## 🤝 Contributing
 

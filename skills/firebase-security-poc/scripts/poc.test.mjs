@@ -198,3 +198,11 @@ test('runPocInSandbox applies the same source guard before uploading', async () 
   const dir = tmpProject({ 'package.json': '{}', '.firebase-security/poc/poc_other_9.mjs': "fetch('https://prod.example.com')" });
   await assert.rejects(runPocInSandbox(dir, '.firebase-security/poc/poc_other_9.mjs', { url: 'http://127.0.0.1:1', token: 't' }), /PoC refused/);
 });
+
+test('shellQuote quotes for POSIX sh and Windows cmd/MSVCRT', async () => {
+  const { shellQuote } = await import('./poc.mjs');
+  assert.equal(shellQuote("it's", 'linux'), `'it'\\''s'`);
+  assert.equal(shellQuote('C:\\a b\\poc.mjs', 'win32'), '"C:\\a b\\poc.mjs"');
+  assert.equal(shellQuote('say "hi"', 'win32'), '"say \\"hi\\""');
+  assert.equal(shellQuote('dir\\', 'win32'), '"dir\\\\"');
+});

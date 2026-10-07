@@ -143,3 +143,33 @@ test('initSecurityDir creates dir with scratch gitignore', () => {
   assert.ok(fs.existsSync(path.join(r.dir, '.gitignore')));
   assert.equal(r.allowlist, null);
 });
+
+test('parseMarkdownReport (bold labels) does not truncate on field-like words in prose', () => {
+  const md = [
+    '### VULN-001: Open rules',
+    '',
+    '- **ID**: VULN-001',
+    '- **Vulnerability**: Anyone can read user profiles',
+    '- **Severity**: High',
+    '- **Source Location**: `firestore.rules:8-10`',
+    '- **Description**: The rule allows reads without auth.',
+    '  Data: email and phone numbers are exposed.',
+    '  Source: any unauthenticated client.',
+    '- **Recommendation**: Require `request.auth.uid == userId`.',
+  ].join('\n');
+  const [f] = parseMarkdownReport(md);
+  assert.equal(f.id, 'VULN-001');
+  assert.equal(f.severity, 'High');
+  assert.match(f.description, /Data: email and phone numbers are exposed\./);
+  assert.match(f.description, /Source: any unauthenticated client\./);
+  assert.deepEqual(f.sourceLocation, { file: 'firestore.rules', startLine: 8, endLine: 10 });
+  assert.match(f.recommendation, /request\.auth\.uid/);
+});
+
+test('parseMarkdownReport still parses plain `Field:` reports', () => {
+  const md = 'ID: V1\nVulnerability: XSS\nSeverity: Medium\nSink Location: src/a.tsx:5\nDescription: bad\n';
+  const [f] = parseMarkdownReport(md);
+  assert.equal(f.id, 'V1');
+  assert.equal(f.severity, 'Medium');
+  assert.deepEqual(f.sinkLocation, { file: 'src/a.tsx', startLine: 5, endLine: 5 });
+});

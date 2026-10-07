@@ -481,11 +481,16 @@ const FIELD_NAMES = [
   'Description', 'Recommendation', 'Phase', 'Firebase Service',
 ].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 
-function extractField(section, label) {
+function extractField(section, label, bold = false) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const rx = new RegExp(`(?:^|\\n)\\s*${escaped}:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${FIELD_NAMES}):|$)`, 'i');
+  // Bold reports (`- **Field**: value`) only treat bold labels as field
+  // boundaries, so a description line like "Data: ..." does not truncate it.
+  const b = bold ? '\\*\\*' : '';
+  const item = bold ? '(?:[-*]\\s+)?' : '';
+  const rx = new RegExp(`(?:^|\\n)\\s*${item}${b}${escaped}${b}:\\s*([\\s\\S]*?)(?=\\n\\s*${item}${b}(?:${FIELD_NAMES})${b}:|$)`, 'i');
   const m = section.match(rx);
-  return m ? m[1].trim() : null;
+  if (!m) return null;
+  return (bold ? m[1].replace(/^\s*[*-]\s+/gm, '').replace(/\*\*/g, '') : m[1]).trim();
 }
 
 export function parseLocation(str) {
@@ -499,18 +504,21 @@ export function parseLocation(str) {
 }
 
 export function parseMarkdownReport(content) {
-  const clean = content.replace(/^\s*[*-]\s+/gm, '').replace(/\*\*/g, '');
+  const bold = new RegExp(`\\*\\*(?:${FIELD_NAMES})\\*\\*:`, 'i').test(content);
+  // Loose mode (plain `Field:` lines) strips list markers and bold up front.
+  const clean = bold ? content : content.replace(/^\s*[*-]\s+/gm, '').replace(/\*\*/g, '');
   let sections;
   if (/^#{1,6} /m.test(clean)) sections = clean.split(/\n(?=#{1,6} )/);
-  else if (/^\s*ID:/m.test(clean)) sections = clean.split(/\n(?=\s*ID:)/);
-  else sections = clean.split(/\n(?=\s*Vulnerability:)/);
+  else if (/^\s*(?:[-*]\s+)?(?:\*\*)?ID(?:\*\*)?:/m.test(clean)) sections = clean.split(/\n(?=\s*(?:[-*]\s+)?(?:\*\*)?ID(?:\*\*)?:)/);
+  else sections = clean.split(/\n(?=\s*(?:[-*]\s+)?(?:\*\*)?Vulnerability(?:\*\*)?:)/);
+  const field = (section, label) => extractField(section, label, bold);
   const findings = [];
   for (let section of sections) {
     section = section.trim();
-    if (!/(^|\n)\s*Vulnerability:/i.test(section)) continue;
-    let lineContent = extractField(section, 'Line Content');
+    if (!/(^|\n)\s*(?:[-*]\s+)?(?:\*\*)?Vulnerability(?:\*\*)?:/i.test(section)) continue;
+    let lineContent = field(section, 'Line Content');
     if (lineContent) lineContent = lineContent.replace(/^```[\w-]*\n?|```$/gm, '').trim();
-    let recommendation = extractField(section, 'Recommendation');
+    let recommendation = field(section, 'Recommendation');
     let codeSuggestion = null;
     if (recommendation) {
       const cm = recommendation.match(/```[^\n`]*\n?([\s\S]*?)```/);
@@ -520,18 +528,18 @@ export function parseMarkdownReport(content) {
       }
     }
     findings.push({
-      id: extractField(section, 'ID'),
-      vulnerability: extractField(section, 'Vulnerability'),
-      vulnerabilityType: extractField(section, 'Vulnerability Type'),
-      severity: extractField(section, 'Severity'),
-      confidence: extractField(section, 'Confidence'),
-      firebaseService: extractField(section, 'Firebase Service'),
-      phase: extractField(section, 'Phase'),
-      dataType: extractField(section, 'Data Type'),
-      sourceLocation: parseLocation(extractField(section, 'Source Location')),
-      sinkLocation: parseLocation(extractField(section, 'Sink Location')),
+      id: field(section, 'ID'),
+      vulnerability: field(section, 'Vulnerability'),
+      vulnerabilityType: field(section, 'Vulnerability Type'),
+      severity: field(section, 'Severity'),
+      confidence: field(section, 'Confidence'),
+      firebaseService: field(section, 'Firebase Service'),
+      phase: field(section, 'Phase'),
+      dataType: field(section, 'Data Type'),
+      sourceLocation: parseLocation(field(section, 'Source Location')),
+      sinkLocation: parseLocation(field(section, 'Sink Location')),
       lineContent,
-      description: extractField(section, 'Description'),
+      description: field(section, 'Description'),
       recommendation,
       codeSuggestion,
     });

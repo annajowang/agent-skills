@@ -268,7 +268,23 @@ function assertInsidePocDir(root, file) {
   return resolved;
 }
 
+const IS_WINDOWS = process.platform === 'win32';
+// npm, npx and gcloud are .cmd shims on Windows; Node refuses to spawn those without a shell.
+const WINDOWS_SHIMS = new Set(['npm', 'npx', 'gcloud']);
+
+/** Quote one argument for the platform shell (cmd.exe on Windows, POSIX sh elsewhere). */
+export function shellQuote(arg, platform = process.platform) {
+  const a = String(arg);
+  if (platform === 'win32') return `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
+  return `'${a.replace(/'/g, `'\\''`)}'`;
+}
+
 function run(cmd, args, opts) {
+  if (IS_WINDOWS && WINDOWS_SHIMS.has(cmd)) {
+    // With shell: true Node joins args unquoted, so quote them ourselves.
+    args = args.map((a) => shellQuote(a));
+    opts = { ...opts, shell: true };
+  }
   const r = spawnSync(cmd, args, { encoding: 'utf-8', maxBuffer: 32 * 1024 * 1024, ...opts });
   return { exitCode: r.status, signal: r.signal, stdout: r.stdout || '', stderr: (r.stderr || '') + (r.error ? `\n${r.error.message}` : '') };
 }
@@ -365,7 +381,8 @@ export function runPoc(root, file, { timeoutSec = 180, allowUnsafe = false } = {
     if (services) {
       const only = services.join(',');
       if (!exists(path.join(pocDir, 'firebase.json'))) writeEmulatorConfig(root, pocDir, services);
-      const inner = [cmd, ...args].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
+      // emulators:exec runs this string through the platform shell.
+      const inner = [cmd, ...args].map((a) => shellQuote(a)).join(' ');
       result = run('npx', ['-y', FIREBASE_TOOLS, 'emulators:exec', '--only', only, '--project', DEMO_PROJECT_ID, inner], { cwd: pocDir, env, timeout });
       if (/java/i.test(result.stderr) && /not found|Could not spawn|ENOENT/i.test(result.stderr)) {
         result.hint = 'The Firestore/Storage/RTDB emulators need a Java runtime (JDK 11+). Install Java, or fall back to a reasoning-only PoC and say so in the report.';
